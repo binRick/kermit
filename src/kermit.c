@@ -34,6 +34,8 @@
                       .blue = CLR_16(CLR_B(x)),  \
                       .alpha = a }
 
+int TERM_WIDTH = 1600, TERM_HEIGHT = 750;
+
 static GtkWidget *window;                            /* Main window widget */
 static GtkWidget *paned;                             /* Paned widged for the tab feature */
 static GtkWidget *notebook;                          /* Notebook widget for the tab feature */
@@ -375,6 +377,7 @@ static int setTermFont(GtkWidget *terminal, int fontSize) {
     gchar *fontStr = g_strconcat(termFont, " ",
                                  g_strdup_printf("%d", fontSize), NULL);
     if ((fontDesc = pango_font_description_from_string(fontStr)) != NULL) {
+        vte_terminal_set_font_scale(VTE_TERMINAL(terminal), 1.0);
         vte_terminal_set_font(VTE_TERMINAL(terminal), fontDesc);
         currentFontSize = fontSize;
         pango_font_description_free(fontDesc);
@@ -448,7 +451,7 @@ static int configureTerm(GtkWidget *terminal) {
                                           termWordChars);
     /* Zuckerberg feature */
     vte_terminal_set_cursor_blink_mode(VTE_TERMINAL(terminal),
-                                       VTE_CURSOR_BLINK_OFF);
+                                       VTE_CURSOR_BLINK_ON);
     /* Set cursor options */
     vte_terminal_set_color_cursor(VTE_TERMINAL(terminal),
                                   &CLR_GDK(termCursorColor, 0));
@@ -472,7 +475,7 @@ static int configureTerm(GtkWidget *terminal) {
 static void termStateCallback(VteTerminal *terminal, GPid pid,
                               GError *error, gpointer userData) {
     if (error == NULL) {
-        printLog("%s started. (PID: %d)\n", TERM_NAME, pid);
+        printLog(".................%s started. (PID: %d)\n", TERM_NAME, pid);
     } else {
         printLog("An error occurred: %s\n", error->message);
         g_clear_error(&error);
@@ -533,7 +536,9 @@ static GtkWidget *getTerm() {
 static int startTerm() {
     /* Create & configure the window widget */
     window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    gtk_window_set_decorated(GTK_WINDOW(window), FALSE);
     gtk_window_set_title(GTK_WINDOW(window), TERM_NAME);
+    gtk_window_set_default_size(window, TERM_WIDTH, TERM_HEIGHT);
     gtk_widget_set_visual(window, /* Alpha channel for transparency */
                           gdk_screen_get_rgba_visual(gtk_widget_get_screen(window)));
     gtk_widget_override_background_color(window, GTK_STATE_FLAG_NORMAL,
