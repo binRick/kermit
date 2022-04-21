@@ -1,27 +1,16 @@
-/*
- * kermit, a VTE-based, simple and froggy terminal emulator.
- * Copyright © 2019-2022 by Orhun Parmaksız <orhunparmaksiz@gmail.com>
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, version 3.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- */
-
-#include "kermit.h"
+#include "../src/kermit.h"
 
 #include <locale.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <strings.h>
 #include <vte/vte.h>
+#include "../../bash-loadable-wireguard/src/log/log.c"
+
+#define DEFAULT_DECORATED_WINDOW TRUE
+#define DEFAULT_TERMINAL_WIDTH 1600
+#define DEFAULT_TERMINAL_HEIGHT 700
+#define DEFAULT_TERMINAL_BORDER_WIDTH 1
 
 #define UNUSED(x) (void)(x)
 #define CLR_R(x) (((x)&0xff0000) >> 16)
@@ -34,7 +23,7 @@
                       .blue = CLR_16(CLR_B(x)),  \
                       .alpha = a }
 
-int TERM_WIDTH = 1600, TERM_HEIGHT = 750;
+int TERM_WIDTH = DEFAULT_TERMINAL_WIDTH, TERM_HEIGHT = DEFAULT_TERMINAL_HEIGHT;
 
 static GtkWidget *window;                            /* Main window widget */
 static GtkWidget *paned;                             /* Paned widged for the tab feature */
@@ -80,6 +69,20 @@ typedef struct KeyBindings {              /* Key bindings struct */
 static Bindings keyBindings[TERM_CONFIG_LENGTH]; /* Array for custom key bindings */
 static GdkRGBA termPalette[TERM_PALETTE_SIZE];   /* Terminal colors */
 
+static void setup_shell_callback(VteTerminal *terminal, GPid pid, GError *error, gpointer user_data){
+    log_debug("setup_shell_callback- <%d> |userdata:%s|\n"
+            , (int)pid
+            , user_data
+            );
+}
+
+static void teardown_shell(void* data){
+    log_trace("teardown_shell- '%s'\n", (char*)data);
+}
+
+static void setup_shell(void* data){
+    log_trace("setup_shell- '%s'\n", (char*)data);
+}
 /*!
  * Print log (debug) message with format specifiers.
  *
@@ -97,6 +100,7 @@ static int printLog(char *format, ...) {
                                 /* Format the string & print */
     va_start(vargs, format);
     vfprintf(stderr, format, vargs);
+    fprintf(stderr, "\n");
     va_end(vargs);
     /* All attributes off */
     fprintf(stderr, "%s", TERM_ATTR_OFF);
@@ -112,8 +116,7 @@ static int printLog(char *format, ...) {
 static int connectSignals(GtkWidget *terminal) {
     g_signal_connect(terminal, "child-exited", G_CALLBACK(termOnChildExit), NULL);
     g_signal_connect(terminal, "key-press-event", G_CALLBACK(termOnKeyPress), NULL);
-    g_signal_connect(terminal, "window-title-changed", G_CALLBACK(termOnTitleChanged),
-                     GTK_WINDOW(window));
+    g_signal_connect(terminal, "window-title-changed", G_CALLBACK(termOnTitleChanged), GTK_WINDOW(window));
     return 0;
 }
 
@@ -125,8 +128,8 @@ static int connectSignals(GtkWidget *terminal) {
  * \param userData
  * \return TRUE on exit
  */
-static gboolean termOnChildExit(VteTerminal *terminal, gint status,
-                                gpointer userData) {
+static gboolean termOnChildExit(VteTerminal *terminal, gint status, gpointer userData) {
+    log_debug("termOnChildExit>");
     /* 'child-exited' signal is emitted on both terminal exit
      * and (notebook) page deletion. Use closeTab variable
      * to solve this issue. Also, it closes the current tab on exit.
@@ -148,7 +151,7 @@ static gboolean termOnChildExit(VteTerminal *terminal, gint status,
     return TRUE;
 }
 
-/*!
+/*! KEY key
  * Handle terminal key press events.
  * 
  * \param terminal
@@ -156,13 +159,13 @@ static gboolean termOnChildExit(VteTerminal *terminal, gint status,
  * \param userData
  * \return FALSE on normal press & TRUE on custom actions
  */
-static gboolean termOnKeyPress(GtkWidget *terminal, GdkEventKey *event,
-                               gpointer userData) {
+static gboolean termOnKeyPress(GtkWidget *terminal, GdkEventKey *event, gpointer userData) {
     /* Unused user data */
     UNUSED(userData);
     /* Check for CTRL, ALT and SHIFT keys */
     keyState = event->state & (GDK_CONTROL_MASK | GDK_SHIFT_MASK | GDK_MOD1_MASK);
     /* CTRL + binding + key */
+    log_trace("Terminal Keypress> key val: %d|key:%s|user data: %s", event->keyval,gdk_keyval_name(event->keyval), userData);
     if (keyState == (actionKey | GDK_CONTROL_MASK)) {
         if (atoi(gdk_keyval_name(event->keyval)) != 0) {
             gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook),
@@ -173,17 +176,31 @@ static gboolean termOnKeyPress(GtkWidget *terminal, GdkEventKey *event,
             /* Copy & Paste */
             case GDK_KEY_C: /* Fallthrough */
             case GDK_KEY_c:
+                log_trace("COPY");
                 vte_terminal_copy_clipboard_format(VTE_TERMINAL(terminal),
                                                    VTE_FORMAT_TEXT);
                 return TRUE;
+            case GDK_KEY_n:
+            case GDK_KEY_N:
+                log_trace("BORDER disabled");
+                gtk_container_set_border_width(GTK_CONTAINER(window), 0);
+                gtk_window_set_decorated(GTK_WINDOW(window), FALSE);
+                return TRUE;
+            case GDK_KEY_y:
+            case GDK_KEY_Y:
+                log_trace("BORDER enabled");
+                gtk_window_set_decorated(GTK_WINDOW(window), DEFAULT_DECORATED_WINDOW);
+                gtk_window_set_decorated(GTK_WINDOW(window), TRUE);
+                return TRUE;
             case GDK_KEY_V: /* Fallthrough */
             case GDK_KEY_v:
+                log_trace("PASTE");
                 vte_terminal_paste_clipboard(VTE_TERMINAL(terminal));
                 return TRUE;
             /* Reload configuration file */
             case GDK_KEY_R: /* Fallthrough */
             case GDK_KEY_r:
-                printLog("Reloading configuration file...\n");
+                log_debug("Reloading configuration file...");
                 if (defaultConfigFile)
                     configFileName = NULL;
                 parseSettings();
@@ -192,7 +209,7 @@ static gboolean termOnKeyPress(GtkWidget *terminal, GdkEventKey *event,
             /* Load the default configuration */
             case GDK_KEY_D:
             case GDK_KEY_d:
-                printLog("Loading the default configuration...\n");
+                printLog("Loading the default configuration...");
                 colorCount = 0;
                 configureTerm(terminal);
                 return TRUE;
@@ -254,6 +271,7 @@ static gboolean termOnKeyPress(GtkWidget *terminal, GdkEventKey *event,
             default:
                 for (int i = 0; i < keyCount; i++) {
                     if (!strcasecmp(gdk_keyval_name(event->keyval), keyBindings[i].key)) {
+                        log_trace("Terminal input feed> '%s'", keyBindings[i].cmd);
                         vte_terminal_feed_child(VTE_TERMINAL(terminal),
                                                 keyBindings[i].cmd, -1);
                         return TRUE;
@@ -273,11 +291,12 @@ static gboolean termOnKeyPress(GtkWidget *terminal, GdkEventKey *event,
  */
 static gboolean termOnTitleChanged(GtkWidget *terminal, gpointer userData) {
     GtkWindow *window = userData;
-    if (termTitle == NULL)
-        gtk_window_set_title(window,
-                             vte_terminal_get_window_title(VTE_TERMINAL(terminal)) ?: TERM_NAME);
-    else
-        gtk_window_set_title(window, termTitle);
+    log_debug("Terminal title changed: \"%s\"", termTitle);
+    char *tt = strdup(termTitle);
+    if (tt == NULL)
+        tt = strdup(vte_terminal_get_window_title(VTE_TERMINAL(terminal)) ?: TERM_NAME);
+
+    gtk_window_set_title(window, tt);
     return TRUE;
 }
 
@@ -307,8 +326,8 @@ static gboolean termOnResize(GtkWidget *widget, GtkAllocation *allocation,
  * \param userData
  * \return TRUE on tab addition
  */
-static gboolean termTabOnAdd(GtkNotebook *notebook, GtkWidget *child,
-                             guint pageNum, gpointer userData) {
+static gboolean termTabOnAdd(GtkNotebook *notebook, GtkWidget *child, guint pageNum, gpointer userData) {
+    log_debug("New Tab created. Switching to tab #%d", pageNum);
     gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook), pageNum);
     return TRUE;
 }
@@ -322,8 +341,8 @@ static gboolean termTabOnAdd(GtkNotebook *notebook, GtkWidget *child,
  * \param userData
  * \return TRUE on switch
  */
-static gboolean termTabOnSwitch(GtkNotebook *notebook, GtkWidget *page,
-                                guint pageNum, gpointer userData) {
+static gboolean termTabOnSwitch(GtkNotebook *notebook, GtkWidget *page, guint pageNum, gpointer userData) {
+    log_debug("Tab Switch.....");
     /* Destroy tabs label if there's not more than one tabs */
     if (gtk_notebook_get_n_pages(GTK_NOTEBOOK(notebook)) == 1) {
         if (tabLabel != NULL)
@@ -361,6 +380,8 @@ static gboolean termTabOnSwitch(GtkNotebook *notebook, GtkWidget *page,
     }
     tabLabelText = g_strconcat(tabLabelText, "~</span>", NULL);
     /* Set the label text with markup */
+    log_trace("tabLabelText:%s", tabLabelText);
+
     gtk_label_set_markup(GTK_LABEL(tabLabel), tabLabelText);
     g_free(fontStr);
     return TRUE;
@@ -374,8 +395,8 @@ static gboolean termTabOnSwitch(GtkNotebook *notebook, GtkWidget *page,
  * \return 0 on success
  */
 static int setTermFont(GtkWidget *terminal, int fontSize) {
-    gchar *fontStr = g_strconcat(termFont, " ",
-                                 g_strdup_printf("%d", fontSize), NULL);
+    log_trace("Setting Terminal font %s | size %d", termFont, fontSize);
+    gchar *fontStr = g_strconcat(termFont, " ", g_strdup_printf("%d", fontSize), NULL);
     if ((fontDesc = pango_font_description_from_string(fontStr)) != NULL) {
         vte_terminal_set_font_scale(VTE_TERMINAL(terminal), 1.0);
         vte_terminal_set_font(VTE_TERMINAL(terminal), fontDesc);
@@ -430,6 +451,7 @@ static int setTermColors(GtkWidget *terminal) {
  * \return 0 on success
  */
 static int configureTerm(GtkWidget *terminal) {
+    log_debug("Configuring terminal.....");
     /* Set numeric locale */
     setlocale(LC_NUMERIC, termLocale);
     /* Hide the mouse cursor when typing */
@@ -450,13 +472,10 @@ static int configureTerm(GtkWidget *terminal) {
     vte_terminal_set_word_char_exceptions(VTE_TERMINAL(terminal),
                                           termWordChars);
     /* Zuckerberg feature */
-    vte_terminal_set_cursor_blink_mode(VTE_TERMINAL(terminal),
-                                       VTE_CURSOR_BLINK_ON);
+    vte_terminal_set_cursor_blink_mode(VTE_TERMINAL(terminal), VTE_CURSOR_BLINK_ON);
     /* Set cursor options */
-    vte_terminal_set_color_cursor(VTE_TERMINAL(terminal),
-                                  &CLR_GDK(termCursorColor, 0));
-    vte_terminal_set_color_cursor_foreground(VTE_TERMINAL(terminal),
-                                             &CLR_GDK(termCursorFg, 0));
+    vte_terminal_set_color_cursor(VTE_TERMINAL(terminal), &CLR_GDK(termCursorColor, 0));
+    vte_terminal_set_color_cursor_foreground(VTE_TERMINAL(terminal), &CLR_GDK(termCursorFg, 0));
     vte_terminal_set_cursor_shape(VTE_TERMINAL(terminal), termCursorShape);
     /* Set the terminal colors and font */
     setTermColors(terminal);
@@ -472,12 +491,12 @@ static int configureTerm(GtkWidget *terminal) {
  * \param error
  * \param userData
  */
-static void termStateCallback(VteTerminal *terminal, GPid pid,
-                              GError *error, gpointer userData) {
+static void termStateCallback(VteTerminal *terminal, GPid pid, GError *error, gpointer userData) {
+    setup_shell_callback(terminal,pid,error,userData);
     if (error == NULL) {
-        printLog(".................%s started. (PID: %d)\n", TERM_NAME, pid);
+        log_debug("<%d> New Terminal Started> |name:%s|userData:%s|", pid, TERM_NAME,userData);
     } else {
-        printLog("An error occurred: %s\n", error->message);
+        log_error("An error occurred: %s", error->message);
         g_clear_error(&error);
     }
     UNUSED(userData);
@@ -498,31 +517,32 @@ static GtkWidget *getTerm() {
     /* Start a new shell */
     envp = g_get_environ();
     command = (gchar *[]){g_strdup(g_environ_getenv(envp, "SHELL")), NULL};
-    printLog("shell: %s\n", *command);
+    log_debug("New Terminal Width |cmd:%s|", *command);
     if (termCommand != NULL) {
         command = (gchar *[]){g_strdup(g_environ_getenv(envp, "SHELL")),
                               "-c", termCommand, NULL};
-        printLog("command: %s %s %s\n", command[0], command[1], command[2]);
+        log_debug("command: %s %s %s", command[0], command[1], command[2]);
     }
     g_strfreev(envp);
     if (workingDir == NULL) {
         workingDir = g_get_current_dir();
     }
-    printLog("workdir: %s\n", g_get_current_dir());
+    log_trace("workdir: %s", g_get_current_dir());
     /* Spawn terminal asynchronously */
+    char *dat = "test123";
     vte_terminal_spawn_async(VTE_TERMINAL(terminal),
                              VTE_PTY_DEFAULT,   /* pty flag */
                              workingDir,        /* working directory */
                              command,           /* argv */
                              NULL,              /* environment variables */
                              G_SPAWN_DEFAULT,   /* spawn flag */
-                             NULL,              /* child setup function */
-                             NULL,              /* child setup data */
-                             NULL,              /* child setup data destroy */
+                             setup_shell,              /* child setup function */
+                             (void*)dat,              /* child setup data */
+                             teardown_shell,              /* child setup data destroy */
                              -1,                /* timeout */
                              NULL,              /* cancellable */
                              termStateCallback, /* async callback */
-                             NULL);             /* callback data */
+                             (void*)dat);             /* callback data */
     /* Show the terminal widget */
     gtk_widget_show(terminal);
     return terminal;
@@ -534,11 +554,24 @@ static GtkWidget *getTerm() {
  * \return 0 on success
  */
 static int startTerm() {
+    log_debug("startTerm> |tabPosition:%d|",tabPosition);
     /* Create & configure the window widget */
-    window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    gtk_window_set_decorated(GTK_WINDOW(window), FALSE);
+    window = gtk_window_new(GTK_WINDOW_TOPLEVEL);  
+
+    /*
+    GtkHeaderBar *header_bar = GTK_HEADER_BAR(gtk_header_bar_new());
+    gtk_widget_show(GTK_WIDGET(header_bar));
+    gtk_header_bar_set_title(header_bar, TERM_NAME);
+    gtk_header_bar_set_show_close_button(header_bar, TRUE);
+    gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
+*/
+    gtk_window_set_decorated(GTK_WINDOW(window), DEFAULT_DECORATED_WINDOW);
     gtk_window_set_title(GTK_WINDOW(window), TERM_NAME);
+    gtk_window_set_resizable(window, TRUE);
+    gtk_window_set_has_resize_grip(window, TRUE);
+    gtk_window_set_focus_visible(window, TRUE);
     gtk_window_set_default_size(window, TERM_WIDTH, TERM_HEIGHT);
+    gtk_container_set_border_width(GTK_CONTAINER(window), DEFAULT_TERMINAL_BORDER_WIDTH);
     gtk_widget_set_visual(window, /* Alpha channel for transparency */
                           gdk_screen_get_rgba_visual(gtk_widget_get_screen(window)));
     gtk_widget_override_background_color(window, GTK_STATE_FLAG_NORMAL,
@@ -580,11 +613,14 @@ static int startTerm() {
  * \return color
  */
 static int parseColor(char *value) {
+
     if (value[0] == '#') {
         memmove(value, value + 1, strlen(value));
         sprintf(value, "%s", g_strconcat("0x", value, NULL));
     }
-    return (int)strtol(value, NULL, 16);
+    int v = (int)strtol(value, NULL, 16);
+    log_trace("parseColor> %s->%d", value, v);
+    return v;
 }
 
 /*!
@@ -601,7 +637,7 @@ static void parseSettings() {
         defaultConfigFile = FALSE;
     configFile = fopen(configFileName, "r");
     if (configFile == NULL) {
-        printLog("config file not found. (%s)\n", configFileName);
+        printLog("config file not found. (%s)", configFileName);
         return;
     }
     keyCount = 0;
@@ -645,7 +681,7 @@ static void parseSettings() {
                     keyBindings[keyCount].cmd = g_strdup(cmd + 1);
                 /* Add key binding to the keys */
                 keyBindings[keyCount].key = g_strdup(key);
-                printLog("cmd %d = %s -> \"%s\"\n", keyCount + 1,
+                printLog("cmd %d = %s -> \"%s\"", keyCount + 1,
                          keyBindings[keyCount].key,
                          keyBindings[keyCount].cmd);
                 /* Increment the keys count */
@@ -770,7 +806,7 @@ static int parseArgs(int argc, char **argv) {
             case ':':
                 /* Show debug message on missing argument */
                 debugMessages = TRUE;
-                printLog("Option requires an argument.\n");
+                printLog("Option requires an argument.");
                 return 1;
         }
     }
@@ -789,5 +825,6 @@ int main(int argc, char *argv[]) {
     /* Initialize GTK and start the terminal */
     gtk_init(&argc, &argv);
     startTerm();
+    log_ok("terminal ended");
     return 0;
 }

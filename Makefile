@@ -1,6 +1,7 @@
 # Project & compiler information
 NAME=kermit
 CFLAGS=-s -O3 -Wall -Wno-deprecated-declarations $(shell pkg-config --cflags vte-2.91)
+CFLAGS += -I ../bash-loadable-wireguard/src
 LIBS=$(shell pkg-config --libs vte-2.91)
 CC=gcc
 all: clean build
